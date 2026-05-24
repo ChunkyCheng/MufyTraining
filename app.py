@@ -94,10 +94,11 @@ def update_node_text(task_tree: dict, target_id: str, new_text: str) -> bool:
     return False
 
 def toggle_node(task_tree: dict, target_id: str) -> bool:
-    """Finds a target task, toggles it, and unchecks parents if the target became unchecked."""
+    """Finds a target task, toggles it, and recursively clears parent completions if unchecked."""
     def process_toggle(tree: dict, target: str) -> tuple[bool, bool]:
         if target in tree:
             tree[target]["completed"] = not tree[target]["completed"]
+            # Returns (Found_Target, Is_Target_Now_Unchecked)
             return True, (not tree[target]["completed"])
         
         for node_id, node_data in tree.items():
@@ -145,6 +146,17 @@ def count_tasks(task_tree: dict) -> tuple[int, int]:
         completed += c
     return total, completed
 
+def verify_all_subtasks_complete(subtask_tree: dict) -> bool:
+    """Returns True if every subtask branch under this level is completed."""
+    if not subtask_tree:
+        return True
+    for node_data in subtask_tree.values():
+        if not node_data["completed"]:
+            return False
+        if not verify_all_subtasks_complete(node_data["subtasks"]):
+            return False
+    return True
+
 # --- Recursive UI Component ---
 def render_task_tree(task_tree: dict, depth=0, parent_id=None):
     """Recursively renders tasks splitting checkboxes from labels cleanly, hiding controls based on edit_mode."""
@@ -152,6 +164,19 @@ def render_task_tree(task_tree: dict, depth=0, parent_id=None):
         current_status = node_data["completed"]
         has_breakdown = len(node_data["subtasks"]) > 0
         
+        # Determine dependency lock state: 
+        # A task can only be toggled if it has no subtasks, or if all its nested subtasks are finished.
+        subtasks_ready = verify_all_subtasks_complete(node_data["subtasks"])
+        is_disabled = not subtasks_ready
+        
+        # Provide helpful instructions on hover depending on state
+        if is_disabled:
+            help_msg = "Complete all micro-steps below this item first before checking it off!"
+        elif current_status:
+            help_msg = "Unchecking this item will automatically uncheck its parent goals above."
+        else:
+            help_msg = "Mark this step complete."
+
         # --- DYNAMIC COLUMN ALIGNMENT ---
         if st.session_state.edit_mode:
             main_cols_ratio = [0.4, 6.4, 1.2]
@@ -168,7 +193,9 @@ def render_task_tree(task_tree: dict, depth=0, parent_id=None):
                     "",
                     value=current_status,
                     key=f"check_{node_id}",
-                    label_visibility="collapsed"
+                    label_visibility="collapsed",
+                    disabled=is_disabled,
+                    help=help_msg
                 )
                 if checked != current_status:
                     toggle_node(st.session_state.tasks, node_id)
@@ -177,6 +204,9 @@ def render_task_tree(task_tree: dict, depth=0, parent_id=None):
             with cols[1]:
                 if current_status:
                     st.markdown(f"##### ~~{node_data['text']}~~")
+                elif is_disabled:
+                    # Fade the text slightly if the task is currently locked behind subtasks
+                    st.markdown(f"##### <span style='color: gray;'>🔒 {node_data['text']}</span>", unsafe_allow_html=True)
                 else:
                     st.markdown(f"##### **{node_data['text']}**")
                     
@@ -190,7 +220,9 @@ def render_task_tree(task_tree: dict, depth=0, parent_id=None):
                     "",
                     value=current_status,
                     key=f"check_{node_id}",
-                    label_visibility="collapsed"
+                    label_visibility="collapsed",
+                    disabled=is_disabled,
+                    help=help_msg
                 )
                 if checked != current_status:
                     toggle_node(st.session_state.tasks, node_id)
@@ -199,6 +231,8 @@ def render_task_tree(task_tree: dict, depth=0, parent_id=None):
             with cols[2]:
                 if current_status:
                     st.markdown(f"└── ~~{node_data['text']}~~")
+                elif is_disabled:
+                    st.markdown(f"└── <span style='color: gray;'>🔒 {node_data['text']}</span>", unsafe_allow_html=True)
                 else:
                     st.markdown(f"└── {node_data['text']}")
                     
