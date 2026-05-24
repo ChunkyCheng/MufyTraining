@@ -1,5 +1,12 @@
 import streamlit as st
 import uuid
+import os
+
+# --- Import Isolated AI Helper Module ---
+try:
+    from ai_helper import generate_task_blueprint
+except ImportError:
+    st.error("Could not find `ai_helper.py`. Please make sure it is saved in the same directory as this file.")
 
 # --- Page Config ---
 st.set_page_config(page_title="Tiny Steps", page_icon="🐾", layout="centered")
@@ -63,6 +70,18 @@ def add_node(task_tree: dict, parent_id: str, text: str) -> bool:
         if add_node(node_data["subtasks"], parent_id, text):
             return True
     return False
+
+def convert_module_output_to_internal_tree(module_breakdown_list: list) -> dict:
+    """Recursively maps clean dictionary arrays from the AI helper module into internal UUID nodes."""
+    internal_dict = {}
+    for item in module_breakdown_list:
+        node_id = str(uuid.uuid4())
+        internal_dict[node_id] = {
+            "text": item["text"].strip(),
+            "completed": False,
+            "subtasks": convert_module_output_to_internal_tree(item["subtasks"])
+        }
+    return internal_dict
 
 def update_node_text(task_tree: dict, target_id: str, new_text: str) -> bool:
     """Recursively search for target_id and update its text string."""
@@ -288,25 +307,61 @@ st.title("🐾 Tiny Steps")
 st.caption("What's the smallest step you could do *and would do*?")
 st.divider()
 
-# --- Add Root Level Task Form (Always Visible) ---
-with st.form("add_main_task_form", clear_on_submit=True):
-    root_task = st.text_input(
-        "Add a top-level goal/task",
-        placeholder="e.g., Write essay"
-    )
-    submitted = st.form_submit_button("Add Main Task", use_container_width=True)
-    if submitted:
-        if root_task:
-            add_node(st.session_state.tasks, None, root_task)
-            st.rerun()
-        else:
-            st.warning("Please enter a task.")
+# --- Creation Portals (Manual vs AI Tabs) ---
+create_tab1, create_tab2 = st.tabs(["✍️ Manual Entry", "🤖 AI Blueprint Assistant"])
+
+with create_tab1:
+    with st.form("add_main_task_form", clear_on_submit=True):
+        root_task = st.text_input(
+            "Add a top-level goal/task",
+            placeholder="e.g., Write essay"
+        )
+        submitted = st.form_submit_button("Add Main Task", use_container_width=True)
+        if submitted:
+            if root_task:
+                add_node(st.session_state.tasks, None, root_task)
+                st.rerun()
+            else:
+                st.warning("Please enter a task.")
+
+with create_tab2:
+    with st.form("ai_task_form", clear_on_submit=False):
+        st.write("✨ *Describe a large, vague goal. Gemini will dissolve your initial procrastination blocks by laying out an ultra-incremental, action-ready step layout structure.*")
+        ai_prompt = st.text_area(
+            "What complex project or goal wants unpacking?",
+            placeholder="e.g., Overhaul my backyard garden space, setup a multi-tab web development server environment, compile quarterly tax assets",
+            height=85
+        )
+        ai_submitted = st.form_submit_button("🪄 Generate Micro-Steps", use_container_width=True)
+        
+        if ai_submitted:
+            if not ai_prompt:
+                st.warning("Please enter a project description.")
+            else:
+                with st.spinner("Analyzing complexity and mapping granular starting positions..."):
+                    try:
+                        # Invoke external helper parsing function
+                        blueprint = generate_task_blueprint(ai_prompt)
+                        
+                        # Generate main framework top-level layer index
+                        main_root_id = str(uuid.uuid4())
+                        
+                        # Build internal task dictionary branch
+                        st.session_state.tasks[main_root_id] = {
+                            "text": blueprint["main_task_title"],
+                            "completed": False,
+                            "subtasks": convert_module_output_to_internal_tree(blueprint["breakdown"])
+                        }
+                        st.toast("Blueprint successfully materialized below! 🎉", icon="🪄")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to generate pipeline structure: {e}")
 
 st.divider()
 
 # --- Display Tree Structure ---
 if not st.session_state.tasks:
-    st.info("No steps yet. Add your first big goal above, then break it down!")
+    st.info("No steps yet. Add your first goal manually or use the AI Assistant above!")
 else:
     # Global Overview Progress Calculations
     total, done = count_tasks(st.session_state.tasks)
@@ -327,7 +382,7 @@ else:
     # --- ISOLATED TABS IMPLEMENTATION ---
     # Fetch root keys and map titles dynamically 
     main_task_ids = list(st.session_state.tasks.keys())
-    tab_titles = [st.session_state.tasks[tid]["text"] for tid in main_task_ids]
+    tab_titles = [st.session_state.tasks[tid]['text'] for tid in main_task_ids]
     
     # Render Streamlit's native tab bars
     tabs = st.tabs(tab_titles)
@@ -335,9 +390,9 @@ else:
     # Pinpoint and isolate tree execution contexts to specific tab scopes
     for i, tab in enumerate(tabs):
         with tab:
-            current_id = main_task_ids[i]
+            tid = main_task_ids[i]
             # Render only the subtree that belongs to this tab's top level root element
-            render_task_tree({current_id: st.session_state.tasks[current_id]})
+            render_task_tree({tid: st.session_state.tasks[tid]})
     
     st.divider()
     
@@ -357,24 +412,27 @@ else:
 with st.sidebar:
     st.title("🐾 Control Panel")
     
-    side_tab1, side_tab2 = st.tabs(["🏆 Achieved", "💡 Strategy"])
+    side_tab1, side_tab2 = st.tabs(["💡 Strategy", "🏆 Achieved"])
     
     with side_tab1:
-        st.subheader("Completed Main Tasks")
-        if not st.session_state.completed_archive:
-            st.info("No main tasks archived yet. Finish a whole task tree stack and clear it!")
-        else:
-            for archived_task in st.session_state.completed_archive:
-                st.success(f"~~{archived_task}~~")
-                
-    with side_tab2:
         st.header("Structured Flow")
         st.markdown("""
+        * Use the **🤖 AI Blueprint Assistant** tab to dynamically construct task architecture via Gemini.
         * Main categories are neatly isolated into **Tabs** to safeguard your cognitive environment.
         * Toggle **✏️ Edit Steps** above the active list to show/hide modification utilities.
         * Use **🌿** to dive a layer deeper (requires you to write out the first micro-step).
         * Use **✏️** next to any item to modify its text value directly inline.
         * Use **➕ Add Step** at the bottom of any block to add more steps to that exact same list level.
+        * If you are putting off a task, break it down further. Think, "What is the smallest step I could do that I would do?"
         """)
         st.divider()
         st.caption("Data stays locally in your browser session storage.")
+        st.subheader("Completed Main Tasks")
+
+                
+    with side_tab2:
+        if not st.session_state.completed_archive:
+            st.info("No main tasks archived yet. Finish a whole task tree stack and clear it!")
+        else:
+            for archived_task in st.session_state.completed_archive:
+                st.success(f"~~{archived_task}~~")
